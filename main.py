@@ -116,6 +116,80 @@ def execution_levels(dag: Dag) -> List[List[str]]:
     return levels
 
 
+def cluster_dag(dag: Dag, depth: int = 2) -> Tuple[Dag, Dict[str, Set[str]]]:
+    """
+    Collapse nodes into clusters by their first `depth` underscore-separated segments.
+    Returns the condensed Dag and a mapping of cluster_name -> member nodes.
+    """
+    def cluster_key(node: str) -> str:
+        return "_".join(node.split("_")[:depth])
+
+    clusters: Dict[str, Set[str]] = defaultdict(set)
+    for node in dag.nodes:
+        clusters[cluster_key(node)].add(node)
+
+    node_to_cluster = {node: cluster_key(node) for node in dag.nodes}
+
+    adjacency: Dict[str, Set[str]] = defaultdict(set)
+    dependencies: Dict[str, Set[str]] = defaultdict(set)
+    cluster_nodes: Set[str] = set(clusters.keys())
+
+    for parent, children in dag.adjacency.items():
+        pc = node_to_cluster[parent]
+        for child in children:
+            cc = node_to_cluster[child]
+            if pc != cc:
+                adjacency[pc].add(cc)
+                dependencies[cc].add(pc)
+
+    for node in cluster_nodes:
+        adjacency.setdefault(node, set())
+        dependencies.setdefault(node, set())
+
+    condensed = Dag(
+        adjacency=dict(adjacency),
+        dependencies=dict(dependencies),
+        nodes=cluster_nodes,
+    )
+    return condensed, dict(clusters)
+
+
+def analyze_dag(dag: Dag) -> None:
+    """Print cluster size distributions and collapsible node candidates."""
+    print(f"Total nodes: {len(dag.nodes)}")
+    print(f"Total edges: {sum(len(v) for v in dag.adjacency.values())}")
+
+    levels = execution_levels(dag)
+    print(f"Execution levels: {len(levels)}")
+    print(f"Max parallelism: {max(len(l) for l in levels)} nodes at level {max(range(len(levels)), key=lambda i: len(levels[i]))}")
+    print()
+
+    for depth in range(1, 5):
+        clusters: Dict[str, Set[str]] = defaultdict(set)
+        for node in dag.nodes:
+            key = "_".join(node.split("_")[:depth])
+            clusters[key].add(node)
+        multi = {k: v for k, v in clusters.items() if len(v) > 1}
+        print(f"Depth {depth}: {len(clusters)} clusters, {len(multi)} with >1 member, "
+              f"largest={max(len(v) for v in clusters.values())}")
+
+    print()
+    print("Collapsible candidates (nodes sharing all but the last underscore segment):")
+    candidates: Dict[str, List[str]] = defaultdict(list)
+    for node in sorted(dag.nodes):
+        parts = node.split("_")
+        if len(parts) > 1:
+            base = "_".join(parts[:-1])
+            candidates[base].append(node)
+    found = 0
+    for base, members in sorted(candidates.items()):
+        if len(members) > 1:
+            print(f"  {base}: {members}")
+            found += 1
+    if not found:
+        print("  (none found — all nodes have a unique base name)")
+
+
 def render_dag_mermaid(dag: Dag, output_file: str = "dag", left_to_right: bool = True) -> str:
     direction = "LR" if left_to_right else "TD"
     lines = [f"flowchart {direction}"]
@@ -130,7 +204,8 @@ def render_dag_mermaid(dag: Dag, output_file: str = "dag", left_to_right: bool =
     return path
 
 
-def render_dag_matplotlib(dag: Dag, output_file: str = "dag", left_to_right: bool = True) -> str:
+def render_dag_matplotlib(dag: Dag, output_file: str = "dag", left_to_right: bool = True,
+                          labels: Dict[str, str] | None = None) -> str:
     try:
         import networkx as nx
         import matplotlib.pyplot as plt
@@ -152,8 +227,9 @@ def render_dag_matplotlib(dag: Dag, output_file: str = "dag", left_to_right: boo
     align = "vertical" if left_to_right else "horizontal"
     pos = nx.multipartite_layout(G, subset_key="subset", align=align)
 
+    node_labels = labels or {n: n for n in dag.nodes}
     fig, ax = plt.subplots(figsize=(12, 8))
-    nx.draw(G, pos, ax=ax, with_labels=True,
+    nx.draw(G, pos, ax=ax, labels=node_labels,
             node_color="lightblue", node_size=2000,
             font_size=10, arrowsize=20)
 
@@ -231,6 +307,10 @@ def main():
     parser.add_argument("-o", "--output", default="dag", help="Output file name without extension (default: dag)")
     parser.add_argument("--top-bottom", action="store_true", help="Layout top-to-bottom instead of left-to-right")
     parser.add_argument("--renderer", choices=["matplotlib", "pyvis", "graphviz", "mermaid"], default="matplotlib", help="Renderer to use (default: matplotlib)")
+    parser.add_argument("--cluster-depth", type=int, default=0, metavar="N",
+                        help="Collapse nodes into clusters by first N underscore-separated name segments before rendering")
+    parser.add_argument("--analyze", action="store_true",
+                        help="Print node/cluster statistics and collapsible candidates, then exit")
     args = parser.parse_args()
 
     try:
@@ -246,9 +326,19 @@ def main():
         print(f"Error building DAG: {e}", file=sys.stderr)
         sys.exit(1)
 
+    if args.analyze:
+        analyze_dag(dag)
+        return
+
+    if args.cluster_depth > 0:
+        dag, clusters = cluster_dag(dag, depth=args.cluster_depth)
+        labels = {name: f"{name}\n({len(members)})" for name, members in clusters.items()}
+    else:
+        labels = None
+
     left_to_right = not args.top_bottom
     if args.renderer == "matplotlib":
-        rendered = render_dag_matplotlib(dag, output_file=args.output, left_to_right=left_to_right)
+        rendered = render_dag_matplotlib(dag, output_file=args.output, left_to_right=left_to_right, labels=labels)
     elif args.renderer == "pyvis":
         rendered = render_dag_pyvis(dag, output_file=args.output, left_to_right=left_to_right)
     elif args.renderer == "graphviz":
