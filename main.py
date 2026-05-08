@@ -130,6 +130,39 @@ def render_dag_mermaid(dag: Dag, output_file: str = "dag", left_to_right: bool =
     return path
 
 
+def render_dag_matplotlib(dag: Dag, output_file: str = "dag", left_to_right: bool = True) -> str:
+    try:
+        import networkx as nx
+        import matplotlib.pyplot as plt
+    except ImportError:
+        raise ImportError("networkx and matplotlib not installed. Run: pip install networkx matplotlib")
+
+    G = nx.DiGraph()
+    G.add_nodes_from(sorted(dag.nodes))
+    for parent, children in sorted(dag.adjacency.items()):
+        for child in sorted(children):
+            G.add_edge(parent, child)
+
+    levels = execution_levels(dag)
+    for level_idx, level_nodes in enumerate(levels):
+        for node in level_nodes:
+            G.nodes[node]["subset"] = level_idx
+
+    # align="vertical" spreads subsets left-to-right; "horizontal" spreads them top-to-bottom
+    align = "vertical" if left_to_right else "horizontal"
+    pos = nx.multipartite_layout(G, subset_key="subset", align=align)
+
+    fig, ax = plt.subplots(figsize=(12, 8))
+    nx.draw(G, pos, ax=ax, with_labels=True,
+            node_color="lightblue", node_size=2000,
+            font_size=10, arrowsize=20)
+
+    path = f"{output_file}.png"
+    plt.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
 def render_dag_pyvis(dag: Dag, output_file: str = "dag", left_to_right: bool = True) -> str:
     try:
         from pyvis.network import Network
@@ -197,7 +230,7 @@ def main():
     parser.add_argument("file", help="Path to the dependency file (e.g. deps.txt)")
     parser.add_argument("-o", "--output", default="dag", help="Output file name without extension (default: dag)")
     parser.add_argument("--top-bottom", action="store_true", help="Layout top-to-bottom instead of left-to-right")
-    parser.add_argument("--renderer", choices=["pyvis", "graphviz", "mermaid"], default="pyvis", help="Renderer to use (default: pyvis)")
+    parser.add_argument("--renderer", choices=["matplotlib", "pyvis", "graphviz", "mermaid"], default="matplotlib", help="Renderer to use (default: matplotlib)")
     args = parser.parse_args()
 
     try:
@@ -214,7 +247,9 @@ def main():
         sys.exit(1)
 
     left_to_right = not args.top_bottom
-    if args.renderer == "pyvis":
+    if args.renderer == "matplotlib":
+        rendered = render_dag_matplotlib(dag, output_file=args.output, left_to_right=left_to_right)
+    elif args.renderer == "pyvis":
         rendered = render_dag_pyvis(dag, output_file=args.output, left_to_right=left_to_right)
     elif args.renderer == "graphviz":
         rendered = render_dag_graphviz(dag, output_file=args.output, left_to_right=left_to_right)
