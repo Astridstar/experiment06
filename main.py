@@ -335,6 +335,84 @@ def render_dag_pyvis(dag: Dag, output_file: str = "dag", left_to_right: bool = T
     return path
 
 
+def _bfs_expand(frontier_map: Dict[str, Set[str]], start: str, hops: int, included: Set[str]) -> None:
+    frontier = {start}
+    for _ in range(hops):
+        next_frontier = {
+            neighbour
+            for n in frontier
+            for neighbour in frontier_map.get(n, set())
+            if neighbour not in included
+        }
+        included.update(next_frontier)
+        frontier = next_frontier
+        if not frontier:
+            break
+
+
+def node_neighborhood(dag: Dag, node: str, hops: int) -> Dag:
+    if node not in dag.nodes:
+        raise ValueError(f"Node not found: {node!r}")
+
+    included = {node}
+    _bfs_expand(dag.adjacency, node, hops, included)
+    _bfs_expand(dag.dependencies, node, hops, included)
+
+    adjacency = {n: dag.adjacency.get(n, set()) & included for n in included}
+    dependencies = {n: dag.dependencies.get(n, set()) & included for n in included}
+    return Dag(adjacency=adjacency, dependencies=dependencies, nodes=included)
+
+
+def _ascii_push_children(
+    stack: List[Tuple[str, str, bool]],
+    adjacency: Dict[str, Set[str]],
+    node: str,
+    prefix: str,
+    is_last: bool,
+) -> None:
+    child_prefix = prefix + ("    " if is_last else "│   ")
+    children = sorted(adjacency.get(node, set()))
+    items = [(c, child_prefix, i == len(children) - 1) for i, c in enumerate(children)]
+    stack.extend(reversed(items))
+
+
+def render_dag_ascii(dag: Dag, output_file: str = "dag") -> str:
+    roots = sorted(n for n in dag.nodes if not dag.dependencies.get(n))
+    visited: Set[str] = set()
+    lines: List[str] = []
+
+    for root in roots:
+        lines.append(root)
+        visited.add(root)
+        children = sorted(dag.adjacency.get(root, set()))
+        stack: List[Tuple[str, str, bool]] = [
+            (child, "", i == len(children) - 1) for i, child in enumerate(children)
+        ]
+        stack.reverse()
+
+        while stack:
+            node, prefix, is_last = stack.pop()
+            connector = "└── " if is_last else "├── "
+            if node in visited:
+                lines.append(prefix + connector + node + " (ref)")
+                continue
+            visited.add(node)
+            lines.append(prefix + connector + node)
+            _ascii_push_children(stack, dag.adjacency, node, prefix, is_last)
+
+        lines.append("")
+
+    while lines and lines[-1] == "":
+        lines.pop()
+
+    result = "\n".join(lines)
+    print(result)
+    path = f"{output_file}.txt"
+    with open(path, "w") as f:
+        f.write(result + "\n")
+    return path
+
+
 def render_dag_graphviz(dag: Dag, output_file: str = "dag", left_to_right: bool = True) -> str:
     try:
         import graphviz
@@ -380,7 +458,10 @@ def main():
     parser.add_argument("file", help="Path to the dependency file (e.g. deps.txt)")
     parser.add_argument("-o", "--output", default="dag", help="Output file name without extension (default: dag)")
     parser.add_argument("--top-bottom", action="store_true", help="Layout top-to-bottom instead of left-to-right")
-    parser.add_argument("--renderer", choices=["matplotlib", "pyvis", "graphviz", "mermaid"], default="matplotlib", help="Renderer to use (default: matplotlib)")
+    parser.add_argument("--renderer", choices=["matplotlib", "pyvis", "graphviz", "mermaid", "ascii"], default="matplotlib", help="Renderer to use (default: matplotlib)")
+    parser.add_argument("--node", metavar="NAME", help="Restrict rendering to the neighborhood of this node")
+    parser.add_argument("--hops", type=int, default=2, metavar="N",
+                        help="Hops upstream and downstream when using --node (default: 2)")
     parser.add_argument("--cluster-depth", type=int, default=0, metavar="N",
                         help="Collapse nodes into clusters by first N underscore-separated name segments before rendering")
     parser.add_argument("--analyze", action="store_true",
@@ -412,6 +493,13 @@ def main():
         analyze_dag(dag)
         return
 
+    if args.node:
+        try:
+            dag = node_neighborhood(dag, args.node, args.hops)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
     if args.cluster_depth > 0:
         dag, clusters = cluster_dag(dag, depth=args.cluster_depth)
         labels = {name: f"{name}\n({len(members)})" for name, members in clusters.items()}
@@ -419,7 +507,9 @@ def main():
         labels = None
 
     left_to_right = not args.top_bottom
-    if args.renderer == "matplotlib":
+    if args.renderer == "ascii":
+        rendered = render_dag_ascii(dag, output_file=args.output)
+    elif args.renderer == "matplotlib":
         rendered = render_dag_matplotlib(dag, output_file=args.output, left_to_right=left_to_right, labels=labels)
     elif args.renderer == "pyvis":
         rendered = render_dag_pyvis(dag, output_file=args.output, left_to_right=left_to_right)
