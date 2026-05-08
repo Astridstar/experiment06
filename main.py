@@ -31,33 +31,83 @@ def parse_dependency_line(line: str) -> List[Tuple[str, str]]:
     return pairs
 
 
-def build_dag(lines: List[str]) -> Dag:
-    adjacency = defaultdict(set)
-    dependencies = defaultdict(set)
-    nodes = set()
+def _parse_edges(lines: List[str]) -> Tuple[Dict[str, Set[str]], Dict[str, Set[str]], Set[str]]:
+    """Parse dependency lines into raw adjacency structures without cycle validation."""
+    adjacency: Dict[str, Set[str]] = defaultdict(set)
+    dependencies: Dict[str, Set[str]] = defaultdict(set)
+    nodes: Set[str] = set()
 
     for line in lines:
         if not line.strip() or line.strip().startswith("#"):
             continue
-
         for parent, child in parse_dependency_line(line):
             adjacency[parent].add(child)
             dependencies[child].add(parent)
-
             nodes.add(parent)
             nodes.add(child)
-
             adjacency.setdefault(child, set())
             dependencies.setdefault(parent, set())
 
-    dag = Dag(
-        adjacency=dict(adjacency),
-        dependencies=dict(dependencies),
-        nodes=nodes
-    )
+    return dict(adjacency), dict(dependencies), nodes
 
+
+def build_dag(lines: List[str]) -> Dag:
+    adjacency, dependencies, nodes = _parse_edges(lines)
+    dag = Dag(adjacency=adjacency, dependencies=dependencies, nodes=nodes)
     validate_no_cycles(dag)
     return dag
+
+
+def find_cycles(adjacency: Dict[str, Set[str]], max_cycles: int = 20) -> List[List[str]]:
+    """
+    Find cycles using iterative DFS with gray/black coloring.
+    Returns up to max_cycles distinct cycle paths, each expressed as
+    [n1, n2, ..., nk, n1] so the repeated node makes the loop explicit.
+    Iterative to avoid hitting Python's recursion limit on large graphs.
+    """
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color: Dict[str, int] = dict.fromkeys(adjacency, WHITE)
+    cycles: List[List[str]] = []
+    path: List[str] = []
+    path_index: Dict[str, int] = {}
+
+    def enter(node: str, stack: list) -> None:
+        color[node] = GRAY
+        path.append(node)
+        path_index[node] = len(path) - 1
+        stack[-1] = (node, iter(sorted(adjacency.get(node, set()))), False)
+
+    def leave(node: str, stack: list) -> None:
+        stack.pop()
+        path.pop()
+        path_index.pop(node, None)
+        color[node] = BLACK
+
+    def advance(child: str, stack: list) -> None:
+        if color[child] == GRAY:
+            cycles.append(path[path_index[child]:] + [child])
+        elif color[child] == WHITE:
+            stack.append((child, None, True))
+
+    for start in sorted(adjacency):
+        if color[start] != WHITE or len(cycles) >= max_cycles:
+            continue
+
+        stack: List[tuple] = [(start, None, True)]
+        while stack and len(cycles) < max_cycles:
+            node, children_iter, entering = stack[-1]
+            if entering:
+                if color[node] != WHITE:
+                    stack.pop()
+                else:
+                    enter(node, stack)
+            else:
+                try:
+                    advance(next(children_iter), stack)
+                except StopIteration:
+                    leave(node, stack)
+
+    return cycles
 
 
 def topological_sort(dag: Dag) -> List[str]:
@@ -76,14 +126,23 @@ def topological_sort(dag: Dag) -> List[str]:
                 queue.append(child)
 
     if len(result) != len(dag.nodes):
-        unresolved = [node for node, deg in in_degree.items() if deg > 0]
+        unresolved = sorted(node for node, deg in in_degree.items() if deg > 0)
         raise ValueError(f"Cycle detected. Unresolved nodes: {unresolved}")
 
     return result
 
 
 def validate_no_cycles(dag: Dag) -> None:
-    topological_sort(dag)
+    try:
+        topological_sort(dag)
+    except ValueError:
+        cycles = find_cycles(dag.adjacency)
+        if cycles:
+            formatted = "\n".join(
+                f"  Cycle {i + 1}: {' -> '.join(c)}" for i, c in enumerate(cycles)
+            )
+            raise ValueError(f"Cycle(s) detected:\n{formatted}") from None
+        raise
 
 
 def execution_levels(dag: Dag) -> List[List[str]]:
@@ -298,6 +357,17 @@ def render_dag_graphviz(dag: Dag, output_file: str = "dag", left_to_right: bool 
 
 
 
+def _report_cycles(lines: List[str], max_cycles: int) -> None:
+    adjacency, _, _ = _parse_edges(lines)
+    cycles = find_cycles(adjacency, max_cycles=max_cycles)
+    if not cycles:
+        print("No cycles found.")
+    else:
+        print(f"Found {len(cycles)} cycle(s) (showing up to {max_cycles}):\n")
+        for i, cycle in enumerate(cycles, 1):
+            print(f"  Cycle {i}: {' -> '.join(cycle)}")
+
+
 def main():
     import argparse
     import sys
@@ -311,6 +381,10 @@ def main():
                         help="Collapse nodes into clusters by first N underscore-separated name segments before rendering")
     parser.add_argument("--analyze", action="store_true",
                         help="Print node/cluster statistics and collapsible candidates, then exit")
+    parser.add_argument("--detect-cycles", action="store_true",
+                        help="Find and print all cycles without aborting, then exit")
+    parser.add_argument("--max-cycles", type=int, default=20, metavar="N",
+                        help="Maximum number of cycles to report with --detect-cycles (default: 20)")
     args = parser.parse_args()
 
     try:
@@ -319,6 +393,10 @@ def main():
     except FileNotFoundError:
         print(f"Error: file not found: {args.file}", file=sys.stderr)
         sys.exit(1)
+
+    if args.detect_cycles:
+        _report_cycles(lines, max_cycles=args.max_cycles)
+        return
 
     try:
         dag = build_dag(lines)
