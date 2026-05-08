@@ -214,39 +214,42 @@ def cluster_dag(dag: Dag, depth: int = 2) -> Tuple[Dag, Dict[str, Set[str]]]:
 
 
 def analyze_dag(dag: Dag) -> None:
-    """Print cluster size distributions and collapsible node candidates."""
-    print(f"Total nodes: {len(dag.nodes)}")
-    print(f"Total edges: {sum(len(v) for v in dag.adjacency.values())}")
+    in_degrees  = {n: len(dag.dependencies.get(n, set())) for n in dag.nodes}
+    out_degrees = {n: len(dag.adjacency.get(n, set()))    for n in dag.nodes}
+    sources = [n for n, d in in_degrees.items()  if d == 0]
+    sinks   = [n for n, d in out_degrees.items() if d == 0]
 
     levels = execution_levels(dag)
+    widest_level = max(range(len(levels)), key=lambda i: len(levels[i]))
+
+    total_edges = sum(len(v) for v in dag.adjacency.values())
+    avg_in  = total_edges / len(dag.nodes)
+    avg_out = avg_in
+
+    print(f"Nodes          : {len(dag.nodes)}")
+    print(f"Edges          : {total_edges}")
     print(f"Execution levels: {len(levels)}")
-    print(f"Max parallelism: {max(len(l) for l in levels)} nodes at level {max(range(len(levels)), key=lambda i: len(levels[i]))}")
+    print(f"Max parallelism: {len(levels[widest_level])} nodes at level {widest_level}")
+    print(f"Sources (no parents): {len(sources)}")
+    print(f"Sinks   (no children): {len(sinks)}")
+    print(f"In-degree  — max: {max(in_degrees.values())}  avg: {avg_in:.1f}")
+    print(f"Out-degree — max: {max(out_degrees.values())}  avg: {avg_out:.1f}")
     print()
 
-    for depth in range(1, 5):
-        clusters: Dict[str, Set[str]] = defaultdict(set)
-        for node in dag.nodes:
-            key = "_".join(node.split("_")[:depth])
-            clusters[key].add(node)
-        multi = {k: v for k, v in clusters.items() if len(v) > 1}
-        print(f"Depth {depth}: {len(clusters)} clusters, {len(multi)} with >1 member, "
-              f"largest={max(len(v) for v in clusters.values())}")
-
+    print("Top 10 bottleneck nodes (highest combined degree):")
+    top = sorted(dag.nodes, key=lambda n: in_degrees[n] + out_degrees[n], reverse=True)[:10]
+    for node in top:
+        print(f"  {node}  (in={in_degrees[node]}, out={out_degrees[node]})")
     print()
-    print("Collapsible candidates (nodes sharing all but the last underscore segment):")
-    candidates: Dict[str, List[str]] = defaultdict(list)
-    for node in sorted(dag.nodes):
-        parts = node.split("_")
-        if len(parts) > 1:
-            base = "_".join(parts[:-1])
-            candidates[base].append(node)
-    found = 0
-    for base, members in sorted(candidates.items()):
-        if len(members) > 1:
-            print(f"  {base}: {members}")
-            found += 1
-    if not found:
-        print("  (none found — all nodes have a unique base name)")
+
+    chains = find_linear_chains(dag)
+    print(f"Linear chains (unbranched runs): {len(chains)}")
+    if chains:
+        longest = chains[0]
+        print(f"  Longest chain: {len(longest)} nodes")
+        for i, node in enumerate(longest):
+            prefix = "    " if i == 0 else "    -> "
+            print(f"{prefix}{node}")
 
 
 def render_dag_mermaid(dag: Dag, output_file: str = "dag", left_to_right: bool = True) -> str:
