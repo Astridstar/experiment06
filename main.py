@@ -130,6 +130,29 @@ def render_dag_mermaid(dag: Dag, output_file: str = "dag", left_to_right: bool =
     return path
 
 
+def render_dag_graphviz(dag: Dag, output_file: str = "dag", left_to_right: bool = True) -> str:
+    try:
+        import graphviz
+    except ImportError:
+        raise ImportError("graphviz package not installed. Run: pip install graphviz")
+
+    direction = "LR" if left_to_right else "TB"
+    dot = graphviz.Digraph(
+        engine="dot",
+        graph_attr={"rankdir": direction},
+    )
+
+    for node in sorted(dag.nodes):
+        dot.node(node)
+
+    for parent, children in sorted(dag.adjacency.items()):
+        for child in sorted(children):
+            dot.edge(parent, child)
+
+    path = dot.render(output_file, format="png", cleanup=True)
+    return path
+
+
 
 
 
@@ -141,6 +164,7 @@ def main():
     parser.add_argument("file", help="Path to the dependency file (e.g. deps.txt)")
     parser.add_argument("-o", "--output", default="dag", help="Output file name without extension (default: dag)")
     parser.add_argument("--top-bottom", action="store_true", help="Layout top-to-bottom instead of left-to-right")
+    parser.add_argument("--renderer", choices=["graphviz", "mermaid"], default="graphviz", help="Renderer to use (default: graphviz)")
     args = parser.parse_args()
 
     try:
@@ -156,7 +180,11 @@ def main():
         print(f"Error building DAG: {e}", file=sys.stderr)
         sys.exit(1)
 
-    rendered = render_dag_mermaid(dag, output_file=args.output, left_to_right=not args.top_bottom)
+    left_to_right = not args.top_bottom
+    if args.renderer == "graphviz":
+        rendered = render_dag_graphviz(dag, output_file=args.output, left_to_right=left_to_right)
+    else:
+        rendered = render_dag_mermaid(dag, output_file=args.output, left_to_right=left_to_right)
     print(f"DAG rendered to: {rendered}")
 
 
