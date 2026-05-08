@@ -242,6 +242,13 @@ def analyze_dag(dag: Dag) -> None:
         print(f"  {node}  (in={in_degrees[node]}, out={out_degrees[node]})")
     print()
 
+    longest_path = find_longest_path(dag)
+    print(f"Longest path   : {len(longest_path) - 1} hops ({len(longest_path)} nodes)")
+    for i, node in enumerate(longest_path):
+        prefix = "    " if i == 0 else "    -> "
+        print(f"{prefix}{node}")
+    print()
+
     chains = find_linear_chains(dag)
     print(f"Linear chains (unbranched runs): {len(chains)}")
     if chains:
@@ -445,6 +452,28 @@ def render_dag_graphviz(dag: Dag, output_file: str = "dag", left_to_right: bool 
 
 
 
+def find_longest_path(dag: Dag) -> List[str]:
+    """Return the node sequence forming the longest path in the DAG."""
+    order = topological_sort(dag)
+    dist: Dict[str, int] = dict.fromkeys(dag.nodes, 0)
+    prev: Dict[str, str | None] = dict.fromkeys(dag.nodes, None)
+
+    for node in order:
+        for child in dag.adjacency.get(node, set()):
+            if dist[node] + 1 > dist[child]:
+                dist[child] = dist[node] + 1
+                prev[child] = node
+
+    end = max(dag.nodes, key=lambda n: dist[n])
+    path: List[str] = []
+    current: str | None = end
+    while current is not None:
+        path.append(current)
+        current = prev[current]
+    path.reverse()
+    return path
+
+
 def find_linear_chains(dag: Dag, min_length: int = 3) -> List[List[str]]:
     """
     Find maximal unbranched paths: every interior node has exactly one parent
@@ -593,6 +622,27 @@ def _report_cycles(lines: List[str], max_cycles: int) -> None:
             print(f"  Cycle {i}: {' -> '.join(cycle)}")
 
 
+def _render(dag: Dag, renderer: str, output_file: str, left_to_right: bool,
+            labels: Dict[str, str] | None) -> str:
+    if renderer == "ascii":
+        return render_dag_ascii(dag, output_file=output_file)
+    if renderer == "matplotlib":
+        return render_dag_matplotlib(dag, output_file=output_file, left_to_right=left_to_right, labels=labels)
+    if renderer == "pyvis":
+        return render_dag_pyvis(dag, output_file=output_file, left_to_right=left_to_right)
+    if renderer == "graphviz":
+        return render_dag_graphviz(dag, output_file=output_file, left_to_right=left_to_right)
+    return render_dag_mermaid(dag, output_file=output_file, left_to_right=left_to_right)
+
+
+def _print_longest_path(dag: Dag) -> None:
+    path = find_longest_path(dag)
+    print(f"Longest path: {len(path) - 1} hops ({len(path)} nodes)")
+    for i, node in enumerate(path):
+        prefix = "    " if i == 0 else "    -> "
+        print(f"{prefix}{node}")
+
+
 def main():
     import argparse
     import sys
@@ -613,6 +663,8 @@ def main():
                         help="Find and print all cycles without aborting, then exit")
     parser.add_argument("--max-cycles", type=int, default=20, metavar="N",
                         help="Maximum number of cycles to report with --detect-cycles (default: 20)")
+    parser.add_argument("--longest-path", action="store_true",
+                        help="Print the longest path in the DAG, then exit")
     parser.add_argument("--find-sequences", action="store_true",
                         help="Detect repeated node sequences and linear chains, then exit")
     parser.add_argument("--min-sequence-count", type=int, default=2, metavar="N",
@@ -644,6 +696,10 @@ def main():
         analyze_dag(dag)
         return
 
+    if args.longest_path:
+        _print_longest_path(dag)
+        return
+
     if args.find_sequences:
         _report_sequences(dag, max_length=args.max_sequence_length,
                           min_count=args.min_sequence_count, normalize_depth=args.sequence_depth)
@@ -662,17 +718,7 @@ def main():
     else:
         labels = None
 
-    left_to_right = not args.top_bottom
-    if args.renderer == "ascii":
-        rendered = render_dag_ascii(dag, output_file=args.output)
-    elif args.renderer == "matplotlib":
-        rendered = render_dag_matplotlib(dag, output_file=args.output, left_to_right=left_to_right, labels=labels)
-    elif args.renderer == "pyvis":
-        rendered = render_dag_pyvis(dag, output_file=args.output, left_to_right=left_to_right)
-    elif args.renderer == "graphviz":
-        rendered = render_dag_graphviz(dag, output_file=args.output, left_to_right=left_to_right)
-    else:
-        rendered = render_dag_mermaid(dag, output_file=args.output, left_to_right=left_to_right)
+    rendered = _render(dag, args.renderer, args.output, not args.top_bottom, labels)
     print(f"DAG rendered to: {rendered}")
 
 
