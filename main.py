@@ -38,7 +38,7 @@ def build_dag(lines: List[str]) -> Dag:
     nodes = set()
 
     for line in lines:
-        if not line.strip():
+        if not line.strip() or line.strip().startswith("#"):
             continue
 
         parent, child = parse_dependency_line(line)
