@@ -1,4 +1,4 @@
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 from typing import Dict, Set, List, Tuple
 
@@ -406,9 +406,12 @@ def render_dag_ascii(dag: Dag, output_file: str = "dag") -> str:
         lines.pop()
 
     result = "\n".join(lines)
-    print(result)
+    try:
+        print(result)
+    except UnicodeEncodeError:
+        print(result.encode("ascii", errors="replace").decode("ascii"))
     path = f"{output_file}.txt"
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(result + "\n")
     return path
 
@@ -437,6 +440,143 @@ def render_dag_graphviz(dag: Dag, output_file: str = "dag", left_to_right: bool 
 
 
 
+
+
+def find_linear_chains(dag: Dag, min_length: int = 3) -> List[List[str]]:
+    """
+    Find maximal unbranched paths: every interior node has exactly one parent
+    and one child. Returns chains sorted longest-first.
+    """
+    visited: Set[str] = set()
+    chains: List[List[str]] = []
+
+    for node in topological_sort(dag):
+        if node in visited:
+            continue
+        visited.add(node)
+        chain = [node]
+        current = node
+        while True:
+            children = dag.adjacency.get(current, set())
+            if len(children) != 1:
+                break
+            (child,) = children
+            if len(dag.dependencies.get(child, set())) != 1:
+                break
+            chain.append(child)
+            visited.add(child)
+            current = child
+        if len(chain) >= min_length:
+            chains.append(chain)
+
+    return sorted(chains, key=lambda c: -len(c))
+
+
+def find_repeated_sequences(
+    dag: Dag,
+    max_length: int = 4,
+    min_count: int = 2,
+    max_paths_per_node: int = 500,
+) -> List[Tuple[Tuple[str, ...], int]]:
+    """
+    Find normalized node-name sequences (last underscore segment) that appear
+    as consecutive paths at least min_count times across the DAG.
+    max_paths_per_node caps memory on high-fanin nodes; a warning is printed
+    if the cap is hit.
+    """
+    def normalize(n: str) -> str:
+        return n.split("_")[-1]
+
+    seq_counts: Counter = Counter()
+    ending: Dict[str, Set[Tuple[str, ...]]] = defaultdict(set)
+    capped = False
+
+    for node in topological_sort(dag):
+        norm = normalize(node)
+        here: Set[Tuple[str, ...]] = {(norm,)}
+        for parent in dag.dependencies.get(node, set()):
+            for path in ending.get(parent, set()):
+                if len(path) < max_length:
+                    here.add(path + (norm,))
+
+        if len(here) > max_paths_per_node:
+            here = set(list(here)[:max_paths_per_node])
+            capped = True
+
+        ending[node] = here
+        for path in here:
+            if len(path) >= 2:
+                seq_counts[path] += 1
+
+    if capped:
+        print(
+            f"Warning: some nodes exceeded {max_paths_per_node} path variants; "
+            "sequence counts may be approximate.",
+            flush=True,
+        )
+
+    return sorted(
+        [(seq, count) for seq, count in seq_counts.items() if count >= min_count],
+        key=lambda x: (-x[1], x[0]),
+    )
+
+
+def _normalize_node(node: str, depth: int) -> str:
+    """Return the last `depth` underscore-separated segments, or the full name if no underscores."""
+    parts = node.split("_")
+    return "_".join(parts[-depth:]) if len(parts) >= depth else node
+
+
+def _print_chain_groups(
+    groups: Dict[Tuple[str, ...], List[List[str]]],
+    min_count: int,
+) -> None:
+    repeated = {s: g for s, g in groups.items() if len(g) >= min_count}
+    unique   = {s: g for s, g in groups.items() if len(g) <  min_count}
+    total    = sum(len(g) for g in groups.values())
+    print(f"=== Linear chains: {total} total, "
+          f"{len(repeated)} repeated patterns, {len(unique)} unique ===")
+    if not repeated:
+        print("  (no repeated chain patterns)")
+    else:
+        print("\n  Repeated chain patterns:")
+        for sig, instances in sorted(repeated.items(), key=lambda x: -len(x[1])):
+            print(f"    {len(instances):4d}x  [{len(sig)}]  {' -> '.join(sig)}")
+            for inst in instances[:2]:
+                print(f"           e.g. {' -> '.join(inst)}")
+            if len(instances) > 2:
+                print(f"           ... and {len(instances) - 2} more")
+    if unique:
+        print(f"\n  Unique chains (first 10 of {len(unique)}):")
+        for _sig, (inst, *_) in list(unique.items())[:10]:
+            print(f"    [{len(_sig)}]  {' -> '.join(inst)}")
+
+
+def _print_path_patterns(seqs: List[Tuple[Tuple[str, ...], int]], max_length: int,
+                         min_count: int, normalize_depth: int) -> None:
+    print(f"=== Repeated name patterns (length 2-{max_length}, min {min_count}x, "
+          f"normalized to last {normalize_depth} segment(s)) ===")
+    if not seqs:
+        print("  (none)")
+        return
+    for seq, count in seqs[:30]:
+        print(f"  {count:5d}x  {' -> '.join(seq)}")
+    if len(seqs) > 30:
+        print(f"  ... and {len(seqs) - 30} more patterns")
+
+
+def _report_sequences(dag: Dag, max_length: int, min_count: int, normalize_depth: int) -> None:
+    normalize = lambda n: _normalize_node(n, normalize_depth)
+
+    chains = find_linear_chains(dag)
+    groups: Dict[Tuple[str, ...], List[List[str]]] = defaultdict(list)
+    for chain in chains:
+        groups[tuple(normalize(n) for n in chain)].append(chain)
+
+    _print_chain_groups(groups, min_count)
+    print()
+    seqs = find_repeated_sequences(dag, max_length=max_length, min_count=min_count)
+    _print_path_patterns(seqs, max_length, min_count, normalize_depth)
 
 
 def _report_cycles(lines: List[str], max_cycles: int) -> None:
@@ -470,6 +610,14 @@ def main():
                         help="Find and print all cycles without aborting, then exit")
     parser.add_argument("--max-cycles", type=int, default=20, metavar="N",
                         help="Maximum number of cycles to report with --detect-cycles (default: 20)")
+    parser.add_argument("--find-sequences", action="store_true",
+                        help="Detect repeated node sequences and linear chains, then exit")
+    parser.add_argument("--min-sequence-count", type=int, default=2, metavar="N",
+                        help="Minimum occurrences to report a repeated sequence (default: 2)")
+    parser.add_argument("--max-sequence-length", type=int, default=4, metavar="N",
+                        help="Maximum sequence length to search for (default: 4)")
+    parser.add_argument("--sequence-depth", type=int, default=1, metavar="N",
+                        help="Number of trailing underscore-segments used to normalize node names for sequence grouping (default: 1)")
     args = parser.parse_args()
 
     try:
@@ -491,6 +639,11 @@ def main():
 
     if args.analyze:
         analyze_dag(dag)
+        return
+
+    if args.find_sequences:
+        _report_sequences(dag, max_length=args.max_sequence_length,
+                          min_count=args.min_sequence_count, normalize_depth=args.sequence_depth)
         return
 
     if args.node:
