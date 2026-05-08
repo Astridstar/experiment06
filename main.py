@@ -244,9 +244,7 @@ def analyze_dag(dag: Dag) -> None:
 
     longest_path = find_longest_path(dag)
     print(f"Longest path   : {len(longest_path) - 1} hops ({len(longest_path)} nodes)")
-    for i, node in enumerate(longest_path):
-        prefix = "    " if i == 0 else "    -> "
-        print(f"{prefix}{node}")
+    _print_path_as_tree(longest_path, indent="  ")
     print()
 
     chains = find_linear_chains(dag)
@@ -254,9 +252,7 @@ def analyze_dag(dag: Dag) -> None:
     if chains:
         longest = chains[0]
         print(f"  Longest chain: {len(longest)} nodes")
-        for i, node in enumerate(longest):
-            prefix = "    " if i == 0 else "    -> "
-            print(f"{prefix}{node}")
+        _print_path_as_tree(longest, indent="  ")
 
 
 def render_dag_mermaid(dag: Dag, output_file: str = "dag", left_to_right: bool = True) -> str:
@@ -622,6 +618,15 @@ def _report_cycles(lines: List[str], max_cycles: int) -> None:
             print(f"  Cycle {i}: {' -> '.join(cycle)}")
 
 
+def _print_path_as_tree(path: List[str], indent: str = "") -> None:
+    """Print a linear path as a cascading tree."""
+    for i, node in enumerate(path):
+        if i == 0:
+            print(indent + node)
+        else:
+            print(indent + "    " * (i - 1) + "└── " + node)
+
+
 def _render(dag: Dag, renderer: str, output_file: str, left_to_right: bool,
             labels: Dict[str, str] | None) -> str:
     if renderer == "ascii":
@@ -638,9 +643,7 @@ def _render(dag: Dag, renderer: str, output_file: str, left_to_right: bool,
 def _print_longest_path(dag: Dag) -> None:
     path = find_longest_path(dag)
     print(f"Longest path: {len(path) - 1} hops ({len(path)} nodes)")
-    for i, node in enumerate(path):
-        prefix = "    " if i == 0 else "    -> "
-        print(f"{prefix}{node}")
+    _print_path_as_tree(path)
 
 
 def main():
