@@ -277,14 +277,18 @@ def render_dag_matplotlib(dag: Dag, output_file: str = "dag", left_to_right: boo
         for child in sorted(children):
             G.add_edge(parent, child)
 
-    levels = execution_levels(dag)
-    for level_idx, level_nodes in enumerate(levels):
-        for node in level_nodes:
-            G.nodes[node]["subset"] = level_idx
-
-    # align="vertical" spreads subsets left-to-right; "horizontal" spreads them top-to-bottom
-    align = "vertical" if left_to_right else "horizontal"
-    pos = nx.multipartite_layout(G, subset_key="subset", align=align)
+    try:
+        levels = execution_levels(dag)
+        for level_idx, level_nodes in enumerate(levels):
+            for node in level_nodes:
+                G.nodes[node]["subset"] = level_idx
+        align = "vertical" if left_to_right else "horizontal"
+        pos = nx.multipartite_layout(G, subset_key="subset", align=align)
+    except ValueError:
+        # Clustering can introduce apparent cycles between clusters even when the
+        # original DAG is acyclic, so fall back to a layout that tolerates cycles.
+        print("Warning: cluster graph contains cycles; using spring layout instead of multipartite.")
+        pos = nx.spring_layout(G, seed=42)
 
     node_labels = labels or {n: n for n in dag.nodes}
     fig, ax = plt.subplots(figsize=(12, 8))
