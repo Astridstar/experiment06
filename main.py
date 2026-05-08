@@ -10,26 +10,25 @@ class Dag:
     nodes: Set[str]
 
 
-def parse_dependency_line(line: str) -> Tuple[str, str]:
+def parse_dependency_line(line: str) -> List[Tuple[str, str]]:
     line = line.strip()
 
     if not line:
         raise ValueError("Empty dependency line found")
 
-    parts = line.split(">>")
-    if len(parts) != 2:
+    parts = [p.strip() for p in line.split(">>")]
+
+    if len(parts) < 2 or any(p == "" for p in parts):
         raise ValueError(f"Invalid dependency format: {line}")
 
-    parent = parts[0].strip()
-    child = parts[1].strip()
+    pairs = []
+    for i in range(len(parts) - 1):
+        parent, child = parts[i], parts[i + 1]
+        if parent == child:
+            raise ValueError(f"Self-dependency is not allowed: {line}")
+        pairs.append((parent, child))
 
-    if not parent or not child:
-        raise ValueError(f"Invalid dependency format: {line}")
-
-    if parent == child:
-        raise ValueError(f"Self-dependency is not allowed: {line}")
-
-    return parent, child
+    return pairs
 
 
 def build_dag(lines: List[str]) -> Dag:
@@ -41,16 +40,15 @@ def build_dag(lines: List[str]) -> Dag:
         if not line.strip() or line.strip().startswith("#"):
             continue
 
-        parent, child = parse_dependency_line(line)
+        for parent, child in parse_dependency_line(line):
+            adjacency[parent].add(child)
+            dependencies[child].add(parent)
 
-        adjacency[parent].add(child)
-        dependencies[child].add(parent)
+            nodes.add(parent)
+            nodes.add(child)
 
-        nodes.add(parent)
-        nodes.add(child)
-
-        adjacency.setdefault(child, set())
-        dependencies.setdefault(parent, set())
+            adjacency.setdefault(child, set())
+            dependencies.setdefault(parent, set())
 
     dag = Dag(
         adjacency=dict(adjacency),
