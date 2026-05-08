@@ -363,6 +363,9 @@ def analyze_dag(dag: Dag) -> None:
     _print_path_as_tree(longest_path, indent="  ")
     print()
 
+    print(f"Unique chains (source-to-sink paths): {count_unique_chains(dag)}")
+    print()
+
     chains = find_linear_chains(dag)
     print(f"Linear chains (unbranched runs): {len(chains)}")
     if chains:
@@ -710,6 +713,31 @@ def find_linear_chains(dag: Dag, min_length: int = 3) -> List[List[str]]:
     return sorted(chains, key=lambda c: -len(c))
 
 
+def count_unique_chains(dag: Dag) -> int:
+    """
+    Count distinct source-to-sink paths (chains) in the DAG.
+
+    A chain is a unique sequence of hops from a root (no parents) to a leaf
+    (no children). Two chains are distinct even if individual nodes share the
+    same name, because they represent different traversal paths through the graph.
+
+    Algorithm: DP over topological order.
+    - paths_to[node] = number of paths from any source to this node
+    - Sources start at 1; every other node sums its parents' counts.
+    - Final answer = sum of paths_to over all sinks.
+    """
+    paths_to: Dict[str, int] = {}
+    for node in topological_sort(dag):
+        parents = dag.dependencies.get(node, set())
+        paths_to[node] = 1 if not parents else sum(paths_to[p] for p in parents)
+
+    return sum(
+        paths_to[n]
+        for n in dag.nodes
+        if not dag.adjacency.get(n)
+    )
+
+
 def find_repeated_sequences(
     dag: Dag,
     max_length: int = 4,
@@ -927,6 +955,8 @@ def main():
                         help="Maximum number of cycles to report with --detect-cycles (default: 20)")
     parser.add_argument("--longest-path", action="store_true",
                         help="Print the longest path in the DAG, then exit")
+    parser.add_argument("--count-chains", action="store_true",
+                        help="Count unique source-to-sink paths (chains), then exit")
     parser.add_argument("--find-sequences", action="store_true",
                         help="Detect repeated node sequences and linear chains, then exit")
     parser.add_argument("--min-sequence-count", type=int, default=2, metavar="N",
@@ -957,6 +987,11 @@ def main():
 
     if args.analyze:
         analyze_dag(dag)
+        return
+
+    if args.count_chains:
+        n = count_unique_chains(dag)
+        print(f"Unique chains (source-to-sink paths): {n}")
         return
 
     if args.longest_path:
