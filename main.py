@@ -363,7 +363,7 @@ def analyze_dag(dag: Dag) -> None:
     _print_path_as_tree(longest_path, indent="  ")
     print()
 
-    print(f"Unique chains (source-to-sink paths): {count_unique_chains(dag)}")
+    _print_chain_distribution(dag)
     print()
 
     chains = find_linear_chains(dag)
@@ -713,29 +713,39 @@ def find_linear_chains(dag: Dag, min_length: int = 3) -> List[List[str]]:
     return sorted(chains, key=lambda c: -len(c))
 
 
-def count_unique_chains(dag: Dag) -> int:
+def chain_length_distribution(dag: Dag) -> Dict[int, int]:
     """
-    Count distinct source-to-sink paths (chains) in the DAG.
+    Return a mapping of {hops: chain_count} for all unique source-to-sink paths.
 
-    A chain is a unique sequence of hops from a root (no parents) to a leaf
-    (no children). Two chains are distinct even if individual nodes share the
-    same name, because they represent different traversal paths through the graph.
-
-    Algorithm: DP over topological order.
-    - paths_to[node] = number of paths from any source to this node
-    - Sources start at 1; every other node sums its parents' counts.
-    - Final answer = sum of paths_to over all sinks.
+    Algorithm: DP over topological order using per-node Counters.
+    - paths_to[node] = Counter of {hop_count: number_of_paths_reaching_this_node}
+    - Sources start at {0: 1} (zero hops, one way to arrive).
+    - Each other node inherits every parent's counter, incrementing each hop count by 1.
+    - Sinks contribute their counter to the final distribution.
     """
-    paths_to: Dict[str, int] = {}
+    paths_to: Dict[str, Counter] = {}
     for node in topological_sort(dag):
         parents = dag.dependencies.get(node, set())
-        paths_to[node] = 1 if not parents else sum(paths_to[p] for p in parents)
+        if not parents:
+            paths_to[node] = Counter({0: 1})
+        else:
+            c: Counter = Counter()
+            for p in parents:
+                for hops, count in paths_to[p].items():
+                    c[hops + 1] += count
+            paths_to[node] = c
 
-    return sum(
-        paths_to[n]
-        for n in dag.nodes
-        if not dag.adjacency.get(n)
-    )
+    dist: Counter = Counter()
+    for n in dag.nodes:
+        if not dag.adjacency.get(n):
+            dist.update(paths_to[n])
+
+    return dict(sorted(dist.items()))
+
+
+def count_unique_chains(dag: Dag) -> int:
+    """Total number of unique source-to-sink paths; delegates to chain_length_distribution."""
+    return sum(chain_length_distribution(dag).values())
 
 
 def find_repeated_sequences(
@@ -933,6 +943,16 @@ def _print_longest_path(dag: Dag) -> None:
     _print_path_as_tree(path)
 
 
+def _print_chain_distribution(dag: Dag) -> None:
+    """Print unique chain count broken down by hop length."""
+    dist = chain_length_distribution(dag)
+    total = sum(dist.values())
+    print(f"Unique chains (source-to-sink paths): {total}")
+    for hops, count in dist.items():
+        label = "hop " if hops == 1 else "hops"
+        print(f"  {hops} {label}: {count}")
+
+
 def main():
     import argparse
     import sys
@@ -990,8 +1010,7 @@ def main():
         return
 
     if args.count_chains:
-        n = count_unique_chains(dag)
-        print(f"Unique chains (source-to-sink paths): {n}")
+        _print_chain_distribution(dag)
         return
 
     if args.longest_path:
