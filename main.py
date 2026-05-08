@@ -130,6 +130,39 @@ def render_dag_mermaid(dag: Dag, output_file: str = "dag", left_to_right: bool =
     return path
 
 
+def render_dag_pyvis(dag: Dag, output_file: str = "dag", left_to_right: bool = True) -> str:
+    try:
+        from pyvis.network import Network
+    except ImportError:
+        raise ImportError("pyvis package not installed. Run: pip install pyvis")
+
+    import json
+
+    direction = "LR" if left_to_right else "UD"
+    net = Network(directed=True, notebook=False)
+    net.set_options(json.dumps({
+        "layout": {
+            "hierarchical": {
+                "enabled": True,
+                "direction": direction,
+                "sortMethod": "directed",
+            }
+        },
+        "physics": {"enabled": False},
+    }))
+
+    for node in sorted(dag.nodes):
+        net.add_node(node, label=node)
+
+    for parent, children in sorted(dag.adjacency.items()):
+        for child in sorted(children):
+            net.add_edge(parent, child)
+
+    path = f"{output_file}.html"
+    net.save_graph(path)
+    return path
+
+
 def render_dag_graphviz(dag: Dag, output_file: str = "dag", left_to_right: bool = True) -> str:
     try:
         import graphviz
@@ -164,7 +197,7 @@ def main():
     parser.add_argument("file", help="Path to the dependency file (e.g. deps.txt)")
     parser.add_argument("-o", "--output", default="dag", help="Output file name without extension (default: dag)")
     parser.add_argument("--top-bottom", action="store_true", help="Layout top-to-bottom instead of left-to-right")
-    parser.add_argument("--renderer", choices=["graphviz", "mermaid"], default="graphviz", help="Renderer to use (default: graphviz)")
+    parser.add_argument("--renderer", choices=["pyvis", "graphviz", "mermaid"], default="pyvis", help="Renderer to use (default: pyvis)")
     args = parser.parse_args()
 
     try:
@@ -181,7 +214,9 @@ def main():
         sys.exit(1)
 
     left_to_right = not args.top_bottom
-    if args.renderer == "graphviz":
+    if args.renderer == "pyvis":
+        rendered = render_dag_pyvis(dag, output_file=args.output, left_to_right=left_to_right)
+    elif args.renderer == "graphviz":
         rendered = render_dag_graphviz(dag, output_file=args.output, left_to_right=left_to_right)
     else:
         rendered = render_dag_mermaid(dag, output_file=args.output, left_to_right=left_to_right)
